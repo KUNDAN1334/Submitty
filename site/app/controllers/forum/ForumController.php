@@ -925,6 +925,9 @@ class ForumController extends AbstractController {
     }
 
     private function editPost() {
+        // Get current timestamp for category filtering
+        $current_time = $this->core->getDateTimeNow();
+        
         // Ensure authentication before call
         $new_post_content = $_POST["thread_post_content"];
         if (!empty($new_post_content)) {
@@ -932,37 +935,44 @@ class ForumController extends AbstractController {
                 $this->core->addErrorMessage("Posts cannot be over " . ForumUtils::FORUM_CHAR_POST_LIMIT . " characters long");
                 return null;
             }
-
+    
             $post_id = $_POST["edit_post_id"];
             $original_post = $this->core->getQueries()->getPost($post_id);
             $original_creator = !empty($original_post) ? $original_post['author_user_id'] : null;
             $anon = (!empty($_POST["Anon"]) && $_POST["Anon"] == "Anon") ? 1 : 0;
             $current_user = $this->core->getUser()->getId();
+    
             if (!$this->modifyAnonymous($original_creator)) {
                 $anon = $original_post["anonymous"] ? 1 : 0;
             }
-
+    
+            // Filter categories based on release date
+            $categories = $this->core->getQueries()->getCategories();
+            $filtered_categories = array_filter($categories, function($category) use ($current_time) {
+                return !isset($category['release_date']) || new \DateTime($category['release_date']) <= $current_time;
+            });
+    
             $markdown = !empty($_POST['markdown_status']);
-
+    
             $file_post = 'file_input';
             $thread_id = $original_post["thread_id"];
             $hasGoodAttachment = $this->checkGoodAttachment(false, $thread_id, $file_post);
             if ($hasGoodAttachment[0] === -1) {
                 return null;
             }
-
+    
             $attachment_name = [];
             if ($hasGoodAttachment[0] === 1) {
                 $thread_dir = FileUtils::joinPaths($this->core->getConfig()->getCoursePath(), "forum_attachments", $thread_id);
                 $post_dir = FileUtils::joinPaths($thread_dir, $post_id);
-
+    
                 if (!is_dir($thread_dir)) {
                     FileUtils::createDir($thread_dir);
                 }
                 if (!is_dir($post_dir)) {
                     FileUtils::createDir($post_dir);
                 }
-
+    
                 $existing_attachments = array_column(FileUtils::getAllFiles($post_dir), "name");
                 //compile list of attachment names
                 for ($i = 0; $i < count($_FILES[$file_post]["name"]); $i++) {
@@ -978,13 +988,13 @@ class ForumController extends AbstractController {
                     }
                     $attachment_name[] = $file_name;
                 }
-
+    
                 for ($i = 0; $i < count($_FILES[$file_post]["name"]); $i++) {
                     $target_file = $post_dir . "/" . $attachment_name[$i];
                     move_uploaded_file($_FILES[$file_post]["tmp_name"][$i], $target_file);
                 }
             }
-
+    
             return $this->core->getQueries()->editPost(
                 $original_creator,
                 $current_user,
@@ -994,10 +1004,12 @@ class ForumController extends AbstractController {
                 $markdown,
                 json_decode($_POST['deleted_attachments']),
                 $attachment_name,
+                $filtered_categories
             );
         }
         return null;
     }
+    
 
     private function getSortedThreads($categories_ids, $max_thread, $show_deleted, $show_merged_thread, $thread_status, $unread_threads, &$blockNumber, $thread_id = -1) {
         $current_user = $this->core->getUser()->getId();
